@@ -960,6 +960,7 @@
         '<td><select class="status-select status-' + st + '" onchange="updateStatus(\'' + c.candidateId + '\',this)">' + opts + '</select></td>' +
         '<td>' +
           '<button class="btn-edit" onclick="openReedit(\'' + c.candidateId + '\')"><i class="fa fa-edit"></i> Edit</button> ' +
+          '<button class="btn-edit" style="background:#fff3d6;border-color:#c9963a;" onclick="exportPDFFromRecord(\'' + c.candidateId + '\')"><i class="fa fa-file-pdf" style="color:#c62828;"></i> PDF</button> ' +
           '<button class="btn-delete" onclick="deleteCandidate(\'' + c.candidateId + '\')"><i class="fa fa-trash"></i></button>' +
         '</td>' +
       '</tr>';
@@ -1062,26 +1063,134 @@
     if (doReset !== false) resetForm();
   }
 
-  // ── Export PDF ────────────────────────────────────────────
+  // ── Export PDF (from form) ────────────────────────────────
   function exportPDF() {
+    buildPDF(collectFormData());
+  }
+
+  // ── Export PDF from Admin table (full saved record) ───────
+  function exportPDFFromRecord(candidateId) {
+    const candidate = _candidatesCache.find(c => c.candidateId === candidateId);
+    if (!candidate) { alert('Record not found.'); return; }
+    buildPDF(candidate);
+  }
+
+  // ── Core PDF builder ──────────────────────────────────────
+  function buildPDF(data) {
     const { jsPDF } = window.jspdf;
     const doc = new jsPDF();
-    const data = collectFormData();
-    doc.setFontSize(16);
-    doc.text("B'Creamy India Pvt Ltd — Candidate Form", 14, 18);
-    doc.setFontSize(10);
-    let y = 30;
-    const lines = [
-      ['Candidate ID', data.candidateId], ['Name', data.fullName], ['Mobile', data.mobile],
-      ['Email', data.email], ['Position', data.position], ['Experience', data.totalExp + ' yrs'],
-      ['Status', data.status], ['Interview Date', data.interviewDate],
-      ['Interviewer', data.interviewerName], ['Remarks', data.remarks],
-    ];
-    lines.forEach(([k, v]) => {
-      if (y > 270) { doc.addPage(); y = 20; }
-      doc.setFont(undefined, 'bold'); doc.text(k + ':', 14, y);
-      doc.setFont(undefined, 'normal'); doc.text(String(v || '—'), 60, y); y += 8;
-    });
+    const pageW = doc.internal.pageSize.getWidth();
+    let y = 0;
+
+    // Fix: replace ₹ with Rs. — jsPDF default font can't render ₹
+    function fmt(val) { return String(val || '—').replace(/₹/g, 'Rs.'); }
+    function salary(val) { return val ? 'Rs. ' + val + ' /month' : '—'; }
+
+    function checkPage(needed) {
+      if (y + (needed || 8) > 280) { doc.addPage(); y = 18; }
+    }
+
+    function drawHeader() {
+      doc.setFillColor(61, 34, 8);
+      doc.rect(0, 0, pageW, 28, 'F');
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(14);
+      doc.setFont(undefined, 'bold');
+      doc.text("B'Creamy India Pvt Ltd", 14, 11);
+      doc.setFontSize(9);
+      doc.setFont(undefined, 'normal');
+      doc.text("Candidate Interview Form", 14, 19);
+      doc.setFontSize(8);
+      doc.text("ID: " + (data.candidateId || '—'), pageW - 14, 19, { align: 'right' });
+      doc.setTextColor(0, 0, 0);
+      y = 36;
+    }
+
+    function drawSectionTitle(title) {
+      checkPage(12);
+      doc.setFillColor(201, 150, 58);
+      doc.rect(14, y - 4, pageW - 28, 8, 'F');
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(9);
+      doc.setFont(undefined, 'bold');
+      doc.text(title, 17, y + 1);
+      doc.setTextColor(0, 0, 0);
+      y += 10;
+    }
+
+    function drawRow(label, value) {
+      const val = fmt(value);
+      checkPage(8);
+      doc.setFontSize(9);
+      doc.setFont(undefined, 'bold');
+      doc.setTextColor(80, 40, 10);
+      doc.text(label + ':', 16, y);
+      doc.setFont(undefined, 'normal');
+      doc.setTextColor(30, 30, 30);
+      const lines = doc.splitTextToSize(val, pageW - 78);
+      doc.text(lines, 70, y);
+      y += Math.max(8, lines.length * 6);
+    }
+
+    function drawTwoCol(pairs) {
+      checkPage(8);
+      doc.setFontSize(9);
+      pairs.forEach(function([label, value], i) {
+        const val = fmt(value);
+        const xBase = i === 0 ? 16 : pageW / 2 + 4;
+        const xVal  = i === 0 ? 55 : pageW / 2 + 43;
+        doc.setFont(undefined, 'bold');
+        doc.setTextColor(80, 40, 10);
+        doc.text(label + ':', xBase, y);
+        doc.setFont(undefined, 'normal');
+        doc.setTextColor(30, 30, 30);
+        doc.text(doc.splitTextToSize(val, 45)[0], xVal, y);
+      });
+      y += 8;
+    }
+
+    // ── Draw document ──────────────────────────────────────
+    drawHeader();
+
+    drawSectionTitle('A.  Personal Details');
+    drawRow('Full Name',   data.fullName);
+    drawTwoCol([['Mobile', data.mobile], ['Email', data.email]]);
+    drawTwoCol([['Date of Birth', data.dob], ['Gender', data.gender]]);
+    drawRow('Address',     data.address);
+
+    drawSectionTitle('B.  Position Details');
+    drawTwoCol([['Position Applied', data.position], ['Preferred Location', data.location]]);
+    drawTwoCol([['Expected Salary', salary(data.expectedSalary)], ['Notice Period', data.noticePeriod]]);
+
+    drawSectionTitle('C.  Education Details');
+    drawRow('Qualification', data.qualification);
+    drawTwoCol([['College / University', data.college], ['Year of Passing', data.yearOfPassing]]);
+
+    drawSectionTitle('D.  Work Experience');
+    drawTwoCol([['Total Experience', data.totalExp ? data.totalExp + ' yrs' : '—'], ['Previous Company', data.prevCompany]]);
+    drawTwoCol([['Last Drawn Salary', salary(data.lastSalary)], ['Shift Work', data.shiftWork]]);
+    drawRow('Reason for Leaving', data.reasonLeaving);
+
+    drawSectionTitle('E.  Skills & Other Info');
+    drawRow('Key Skills',      data.keySkills);
+    drawRow('Languages Known', data.languages);
+
+    drawSectionTitle('G.  Interview Details  (HR Only)');
+    drawTwoCol([['Interview Date', data.interviewDate], ['Interview Time', data.interviewTime]]);
+    drawTwoCol([['Interview Mode', data.interviewMode], ['Interviewer Name', data.interviewerName]]);
+    drawTwoCol([['Status', data.status], ['Submitted At', data.submittedAt ? data.submittedAt.slice(0,10) : '—']]);
+    drawRow('Remarks', data.remarks);
+
+    // Footer
+    const totalPages = doc.internal.getNumberOfPages();
+    for (let p = 1; p <= totalPages; p++) {
+      doc.setPage(p);
+      doc.setFontSize(7);
+      doc.setTextColor(150, 150, 150);
+      doc.text("B'Creamy India Pvt Ltd — Confidential", 14, 292);
+      doc.text('Page ' + p + ' of ' + totalPages, pageW - 14, 292, { align: 'right' });
+    }
+
     doc.save((data.candidateId || 'candidate') + '.pdf');
   }
 
