@@ -683,12 +683,13 @@
             <th>Experience</th>
             <th>Interview Date</th>
             <th>Status</th>
+            <th>Resume</th>
             <th>Actions</th>
           </tr>
         </thead>
         <tbody id="candidatesBody">
           <tr class="empty-row">
-            <td colspan="8"><i class="fa fa-inbox"></i> No candidates yet. Submit a form to see records.</td>
+            <td colspan="9"><i class="fa fa-inbox"></i> No candidates yet. Submit a form to see records.</td>
           </tr>
         </tbody>
       </table>
@@ -720,7 +721,7 @@
   // ============================================================
 
   // ▶▶ PASTE YOUR APPS SCRIPT WEB APP URL BELOW ◀◀
-  const SHEET_URL = 'https://script.google.com/macros/s/AKfycbzvORhh2RWkZxmPJ0Qdk-L5PYBNTbh5BCWaaiqGjKgYJSYTZn1iRvXY9MIARX1pmAaj/exec';
+  const SHEET_URL = 'https://script.google.com/macros/s/AKfycbxlaivYsLyG4_xrmB_lvAbWWkI2_M59Z83mN7dqfm6xZfWkfTUkzQHD6z6bFSzyhULO/exec';
   const ADMIN_PIN = 'bcreamy2024';
 
   // ── In-memory cache of candidates loaded from Sheets ─────
@@ -832,6 +833,21 @@
     return ok;
   }
 
+  // ── Read resume file as base64 ───────────────────────────
+  function readResumeAsBase64() {
+    return new Promise(function(resolve) {
+      const input = document.getElementById('resumeFile');
+      if (!input.files || !input.files[0]) { resolve(null); return; }
+      const file   = input.files[0];
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        const base64 = e.target.result.split(',')[1]; // strip data:...;base64,
+        resolve({ name: file.name, mimeType: file.type, data: base64 });
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
   // ── Form submit (add new candidate) ──────────────────────
   document.getElementById('candidateForm').addEventListener('submit', async function(e) {
     e.preventDefault();
@@ -840,10 +856,12 @@
     data.submittedAt = new Date().toISOString();
     data.status = data.status || 'Pending';
 
-    showSpinner('Saving candidate…');
+    showSpinner('Uploading resume & saving…');
     try {
-      await apiCall({ action: 'add', candidate: data });
-      _candidatesCache.unshift(data); // optimistic update
+      const resume = await readResumeAsBase64();
+      const result = await apiCall({ action: 'add', candidate: data, resume: resume });
+      if (result.resumeLink) data.resumeLink = result.resumeLink;
+      _candidatesCache.unshift(data);
       document.getElementById('toastCandidateId').textContent = 'ID: ' + data.candidateId;
       const toast = document.getElementById('successToast');
       toast.classList.add('show');
@@ -942,7 +960,7 @@
 
     const tbody = document.getElementById('candidatesBody');
     if (!filtered.length) {
-      tbody.innerHTML = '<tr class="empty-row"><td colspan="8"><i class="fa fa-inbox"></i> No candidates found.</td></tr>';
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="9"><i class="fa fa-inbox"></i> No candidates found.</td></tr>';
       return;
     }
     tbody.innerHTML = filtered.map(c => {
@@ -958,6 +976,7 @@
         '<td>' + (c.totalExp ? c.totalExp + ' yr' : '—') + '</td>' +
         '<td>' + (c.interviewDate || '—') + '</td>' +
         '<td><select class="status-select status-' + st + '" onchange="updateStatus(\'' + c.candidateId + '\',this)">' + opts + '</select></td>' +
+        '<td>' + (c.resumeLink ? '<a href="' + c.resumeLink + '" target="_blank" style="color:#c9963a;font-weight:600;font-size:0.82rem;text-decoration:none;"><i class="fa fa-file-alt"></i> View</a>' : '<span style="color:#bbb;font-size:0.8rem;">—</span>') + '</td>' +
         '<td>' +
           '<button class="btn-edit" onclick="openReedit(\'' + c.candidateId + '\')"><i class="fa fa-edit"></i> Edit</button> ' +
           '<button class="btn-edit" style="background:#fff3d6;border-color:#c9963a;" onclick="exportPDFFromRecord(\'' + c.candidateId + '\')"><i class="fa fa-file-pdf" style="color:#c62828;"></i> PDF</button> ' +
@@ -1033,14 +1052,13 @@
     if (!reeditId) return;
     const updated = collectFormData();
     updated.lastEdited = new Date().toISOString();
-    // Merge with existing record to preserve submittedAt etc.
     const existing = _candidatesCache.find(c => c.candidateId === reeditId) || {};
     const merged = Object.assign({}, existing, updated);
 
     showSpinner('Saving changes…');
     try {
-      await apiCall({ action: 'update', candidate: merged });
-      // Update cache
+      const resume = await readResumeAsBase64();
+      await apiCall({ action: 'update', candidate: merged, resume: resume });
       const idx = _candidatesCache.findIndex(c => c.candidateId === reeditId);
       if (idx !== -1) _candidatesCache[idx] = merged;
       document.getElementById('toastCandidateId').textContent = 'Record ' + reeditId + ' updated.';
