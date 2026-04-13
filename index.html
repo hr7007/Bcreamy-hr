@@ -721,7 +721,7 @@
   // ============================================================
 
   // ▶▶ PASTE YOUR APPS SCRIPT WEB APP URL BELOW ◀◀
-  const SHEET_URL = 'https://script.google.com/macros/s/AKfycbxlaivYsLyG4_xrmB_lvAbWWkI2_M59Z83mN7dqfm6xZfWkfTUkzQHD6z6bFSzyhULO/exec';
+  const SHEET_URL = 'https://script.google.com/macros/s/AKfycbzUjusGyP28k33RYZTnA6XtMlO6guEHbt9uQvJlhmD8lGjP06U2fOozeczfDBDjbRY/exec';
   const ADMIN_PIN = 'bcreamy2024';
 
   // ── In-memory cache of candidates loaded from Sheets ─────
@@ -841,9 +841,10 @@
       const file   = input.files[0];
       const reader = new FileReader();
       reader.onload = function(e) {
-        const base64 = e.target.result.split(',')[1]; // strip data:...;base64,
+        const base64 = e.target.result.split(',')[1];
         resolve({ name: file.name, mimeType: file.type, data: base64 });
       };
+      reader.onerror = function() { resolve(null); };
       reader.readAsDataURL(file);
     });
   }
@@ -856,11 +857,21 @@
     data.submittedAt = new Date().toISOString();
     data.status = data.status || 'Pending';
 
-    showSpinner('Uploading resume & saving…');
+    const hasResume = document.getElementById('resumeFile').files && document.getElementById('resumeFile').files[0];
+    showSpinner(hasResume ? 'Uploading resume to Google Drive…' : 'Saving candidate…');
+
     try {
       const resume = await readResumeAsBase64();
-      const result = await apiCall({ action: 'add', candidate: data, resume: resume });
-      if (result.resumeLink) data.resumeLink = result.resumeLink;
+      const payload = { action: 'add', candidate: data, resume: resume };
+      const result  = await apiCall(payload);
+
+      if (result.resumeLink && !result.resumeLink.startsWith('Upload failed')) {
+        data.resumeLink = result.resumeLink;
+      } else if (result.resumeLink && result.resumeLink.startsWith('Upload failed')) {
+        console.warn('Resume upload error:', result.resumeLink);
+        alert('⚠️ Candidate saved but resume upload failed:\n' + result.resumeLink);
+      }
+
       _candidatesCache.unshift(data);
       document.getElementById('toastCandidateId').textContent = 'ID: ' + data.candidateId;
       const toast = document.getElementById('successToast');
