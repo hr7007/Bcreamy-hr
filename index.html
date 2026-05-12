@@ -490,7 +490,7 @@
 // ═══════════════════════════════════════════════════════
 
 // ▶▶ PASTE YOUR APPS SCRIPT WEB APP URL HERE ◀◀
-const SHEET_URL = 'https://script.google.com/macros/s/AKfycbyvfsrHp8PjFDvT68ow2bbgMJ8M0On8P_1KrdtHnogOgnWA_v-s3XgMZ50BfjlKmn77/exec';
+const SHEET_URL = 'https://script.google.com/macros/s/AKfycbz_ZsrWaVvoxJuIin5rSB2MpyT5pBPN0BmaGW1XgS7JbdpbRoPPdiomsEEBIN878HDC/exec';
 const ADMIN_PIN = 'bcreamy2026';
 const CONFIG_KEY = 'bcreamyFormConfig';
 
@@ -610,14 +610,20 @@ function showView(name){
 //  FORM CONFIG — load / save
 // ═══════════════════════════════════════════════════════
 async function loadConfig(){
-  // Try Sheets first, fallback to localStorage, then default
-  try {
-    const res = await apiCall({action:'getConfig'});
-    if(res.config && res.config.length>0){ formConfig=res.config; return; }
-  } catch(e){}
+  // 1. Try localStorage first (fastest, works offline)
   const local = localStorage.getItem(CONFIG_KEY);
-  if(local){ try{ formConfig=JSON.parse(local); return; }catch(e){} }
-  formConfig = JSON.parse(JSON.stringify(DEFAULT_CONFIG));
+  if(local){ try{ formConfig=JSON.parse(local); } catch(e){ formConfig=JSON.parse(JSON.stringify(DEFAULT_CONFIG)); } }
+  else { formConfig = JSON.parse(JSON.stringify(DEFAULT_CONFIG)); }
+  // 2. Try Sheets in background — update if found
+  if(SHEET_URL && !SHEET_URL.includes('YOUR_APPS_SCRIPT')){
+    try {
+      const res = await apiCall({action:'getConfig'});
+      if(res.config && res.config.length>0){
+        formConfig=res.config;
+        localStorage.setItem(CONFIG_KEY, JSON.stringify(formConfig));
+      }
+    } catch(e){ /* silent — use what we already have */ }
+  }
 }
 
 async function saveFormConfig(){
@@ -1111,7 +1117,8 @@ function renderAdminTable(){
   const activeF = document.getElementById('statusFilter').value;
   function sc(cls,label,val,num){
     const isActive = activeF===val;
-    return '<div class="stat-card '+cls+'" onclick="filterByStatus(''+val+'')" style="cursor:pointer;transition:transform 0.15s,box-shadow 0.15s;'+(isActive?'transform:scale(1.06);box-shadow:0 6px 20px rgba(0,0,0,0.15);outline:2px solid #333;':'')+'" title="Click to filter by '+label+'"><div class="stat-num">'+num+'</div><div class="stat-lbl">'+label+'</div></div>';
+    const style = 'cursor:pointer;transition:transform 0.15s,box-shadow 0.15s;' + (isActive?'transform:scale(1.06);box-shadow:0 6px 20px rgba(0,0,0,0.15);outline:2px solid #333;':'');
+    return '<div class="stat-card '+cls+'" onclick="filterByStatus(\'' +val+ '\')" style="'+style+'" title="Filter by '+label+'"><div class="stat-num">'+num+'</div><div class="stat-lbl">'+label+'</div></div>';
   }
   document.getElementById('statsRow').innerHTML=
     sc('','Total','',total)+
@@ -1453,15 +1460,29 @@ async function apiCall(payload){
 // ═══════════════════════════════════════════════════════
 //  BOOT
 // ═══════════════════════════════════════════════════════
-(async function boot(){
+async function boot(){
   showSpinner('Loading form…');
-  await loadConfig();
+  try {
+    await loadConfig();
+  } catch(e){
+    formConfig = JSON.parse(JSON.stringify(DEFAULT_CONFIG));
+  }
+  if(!formConfig || formConfig.length===0){
+    formConfig = JSON.parse(JSON.stringify(DEFAULT_CONFIG));
+  }
   renderForm();
   const id=genId();
   document.getElementById('candidateId').value=id;
   document.getElementById('candidateIdDisplay').textContent=id;
   hideSpinner();
-})();
+}
+
+// Run after DOM is fully loaded
+if(document.readyState==='loading'){
+  document.addEventListener('DOMContentLoaded', boot);
+} else {
+  boot();
+}
 </script>
 </body>
 </html>
