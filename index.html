@@ -143,14 +143,16 @@
     .filter-select:focus{border-color:var(--red);}
     .admin-body{max-width:1200px;margin:0 auto;padding:24px 28px;}
     .stats-row{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:24px;}
-    .stat-card{background:#fff;border:2px solid var(--border);border-radius:12px;padding:14px 20px;display:flex;flex-direction:column;align-items:center;min-width:90px;box-shadow:var(--shadow);}
+    .stat-card{background:#fff;border:2px solid var(--border);border-radius:12px;padding:14px 20px;display:flex;flex-direction:column;align-items:center;min-width:90px;box-shadow:var(--shadow);cursor:pointer;transition:transform 0.15s,box-shadow 0.15s;}
+    .stat-card:hover{transform:translateY(-2px);box-shadow:0 8px 24px rgba(0,0,0,0.12);}
     .stat-card.s-red{border-color:var(--red);background:var(--red-light);}
     .stat-card.s-green{border-color:#43a047;background:#e8f5e9;}
     .stat-card.s-orange{border-color:#fb8c00;background:#fff3e0;}
     .stat-card.s-amber{border-color:#fdd835;background:var(--yellow-lt);}
     .stat-num{font-family:'Nunito',sans-serif;font-weight:900;font-size:1.6rem;color:var(--dark);}
     .stat-lbl{font-size:0.72rem;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;}
-    .table-wrap{background:#fff;border-radius:14px;border:1.5px solid var(--border);overflow:auto;box-shadow:var(--shadow);}
+    .table-wrap{background:#fff;border-radius:14px;border:1.5px solid var(--border);overflow-x:auto;overflow-y:visible;box-shadow:var(--shadow);}
+    table{min-width:900px;}
     table{width:100%;border-collapse:collapse;font-size:0.85rem;}
     thead tr{background:var(--dark);}
     th{padding:14px 16px;text-align:left;color:var(--yellow);font-family:'Nunito',sans-serif;font-weight:800;font-size:0.78rem;text-transform:uppercase;letter-spacing:0.5px;white-space:nowrap;}
@@ -1106,12 +1108,17 @@ function renderAdminTable(){
   const rej=candidates.filter(c=>c.status==='Rejected').length;
   const hold=candidates.filter(c=>c.status==='Hold').length;
   const pend=candidates.filter(c=>!c.status||c.status==='Pending').length;
+  const activeF = document.getElementById('statusFilter').value;
+  function sc(cls,label,val,num){
+    const isActive = activeF===val;
+    return '<div class="stat-card '+cls+'" onclick="filterByStatus(''+val+'')" style="cursor:pointer;transition:transform 0.15s,box-shadow 0.15s;'+(isActive?'transform:scale(1.06);box-shadow:0 6px 20px rgba(0,0,0,0.15);outline:2px solid #333;':'')+'" title="Click to filter by '+label+'"><div class="stat-num">'+num+'</div><div class="stat-lbl">'+label+'</div></div>';
+  }
   document.getElementById('statsRow').innerHTML=
-    '<div class="stat-card"><div class="stat-num">'+total+'</div><div class="stat-lbl">Total</div></div>'+
-    '<div class="stat-card s-green"><div class="stat-num">'+sel+'</div><div class="stat-lbl">Selected</div></div>'+
-    '<div class="stat-card s-red"><div class="stat-num">'+rej+'</div><div class="stat-lbl">Rejected</div></div>'+
-    '<div class="stat-card s-orange"><div class="stat-num">'+hold+'</div><div class="stat-lbl">Hold</div></div>'+
-    '<div class="stat-card s-amber"><div class="stat-num">'+pend+'</div><div class="stat-lbl">Pending</div></div>';
+    sc('','Total','',total)+
+    sc('s-green','Selected','Selected',sel)+
+    sc('s-red','Rejected','Rejected',rej)+
+    sc('s-orange','Hold','Hold',hold)+
+    sc('s-amber','Pending','Pending',pend);
 
   const tbody=document.getElementById('tableBody');
   if(!filtered.length){ tbody.innerHTML='<tr class="empty-row"><td colspan="99"><i class="fa fa-inbox"></i> No candidates found.</td></tr>'; return; }
@@ -1143,6 +1150,12 @@ function renderAdminTable(){
 }
 
 function filterTable(){ renderAdminTable(); }
+function filterByStatus(val){
+  const sel = document.getElementById('statusFilter');
+  // Toggle off if already active
+  sel.value = sel.value === val ? '' : val;
+  renderAdminTable();
+}
 
 async function testConnection(){
   showSpinner('Testing connection to Google Sheets…');
