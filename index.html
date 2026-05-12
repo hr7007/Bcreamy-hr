@@ -417,6 +417,7 @@
           <option>Pending</option>
         </select>
         <button class="btn-danger" onclick="clearAll()"><i class="fa fa-trash"></i> Clear All</button>
+        <button onclick="testConnection()" style="background:#1a1a1a;border:2px solid #555;border-radius:10px;color:#fff;padding:9px 14px;font-size:0.82rem;font-weight:600;cursor:pointer;" title="Test Google Sheets connection"><i class="fa fa-plug" style="color:var(--yellow);"></i></button>
       </div>
     </div>
   </div>
@@ -487,8 +488,8 @@
 // ═══════════════════════════════════════════════════════
 
 // ▶▶ PASTE YOUR APPS SCRIPT WEB APP URL HERE ◀◀
-const SHEET_URL = 'YOUR_APPS_SCRIPT_WEB_APP_URL_HERE';
-const ADMIN_PIN = 'bcreamy2024';
+const SHEET_URL = 'https://script.google.com/macros/s/AKfycbz_ZsrWaVvoxJuIin5rSB2MpyT5pBPN0BmaGW1XgS7JbdpbRoPPdiomsEEBIN878HDC/exec';
+const ADMIN_PIN = 'bcreamy2026';
 const CONFIG_KEY = 'bcreamyFormConfig';
 
 // ── DEFAULT FORM CONFIG ───────────────────────────────
@@ -915,20 +916,39 @@ function readResumeBase64(){
 // ── PDF EXPORT ────────────────────────────────────────
 // ── FORMAT HELPERS ───────────────────────────────────────
 function fmtDate(v){
-  if(!v||v==='—') return '—';
-  // date input returns YYYY-MM-DD
-  if(/^\d{4}-\d{2}-\d{2}$/.test(v)){
-    const [y,m,d]=v.split('-');
+  if(!v||v==='—'||v==='') return '—';
+  // Already formatted DD/MM/YYYY
+  if(/^\d{2}\/\d{2}\/\d{4}$/.test(v)) return v;
+  // Standard date input: YYYY-MM-DD
+  if(/^\d{4}-\d{2}-\d{2}/.test(v)){
+    const [y,m,d]=v.slice(0,10).split('-');
+    return d+'/'+m+'/'+y;
+  }
+  // Legacy Date string like "Sat May 09 2026 00:00:00" — extract date parts
+  const dt = new Date(v);
+  if(!isNaN(dt.getTime())){
+    const d=String(dt.getDate()).padStart(2,'0');
+    const m=String(dt.getMonth()+1).padStart(2,'0');
+    const y=dt.getFullYear();
     return d+'/'+m+'/'+y;
   }
   return v;
 }
 function fmtTime(v){
-  if(!v||v==='—') return '—';
-  // time input returns HH:MM — just return as-is, never parse as Date
-  if(/^\d{2}:\d{2}(:\d{2})?$/.test(v)){
+  if(!v||v==='—'||v==='') return '—';
+  // Already formatted like "2:03 PM"
+  if(/\d+:\d+\s*(AM|PM)/i.test(v)) return v;
+  // Standard time input: HH:MM or HH:MM:SS
+  if(/^\d{2}:\d{2}/.test(v)){
     const [h,m]=v.split(':');
     const hh=parseInt(h); const ampm=hh>=12?'PM':'AM'; const h12=hh%12||12;
+    return h12+':'+m+' '+ampm;
+  }
+  // Legacy Date string like "Sat Dec 30 1899 14:03:00" — extract time only
+  const match = v.match(/(\d{2}):(\d{2}):(\d{2})/);
+  if(match){
+    const hh=parseInt(match[1]); const m=match[2];
+    const ampm=hh>=12?'PM':'AM'; const h12=hh%12||12;
     return h12+':'+m+' '+ampm;
   }
   return v;
@@ -945,8 +965,14 @@ function exportPDF(candidateData){
   const pageW=doc.internal.pageSize.getWidth(); let y=0;
 
   function fmt(v,fieldId){
-    if(fieldId==='interviewDate') return fmtDate(v);
+    if(!v||v==='') return '—';
+    if(fieldId==='interviewDate'||fieldId==='dob') return fmtDate(v);
     if(fieldId==='interviewTime') return fmtTime(v);
+    // Catch any other Date-like strings stored from old submissions
+    if(typeof v==='string' && v.match(/^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s/)){
+      if(fieldId&&fieldId.toLowerCase().includes('time')) return fmtTime(v);
+      return fmtDate(v);
+    }
     return String(v||'—').replace(/₹/g,'Rs.');
   }
   function chk(n){ if(y+(n||8)>276){doc.addPage();y=18;} }
@@ -987,15 +1013,30 @@ function exportPDF(candidateData){
   hdr();
   formConfig.forEach(section=>{
     sec(section.badge+'.  '+section.title);
-    const inlines  = section.fields.filter(f=>f.type!=='file'&&f.type!=='radio'&&f.type!=='textarea');
-    const radios   = section.fields.filter(f=>f.type==='radio');
-    const textareas= section.fields.filter(f=>f.type==='textarea');
-    for(let i=0;i<inlines.length;i+=2){
-      if(inlines[i+1]) two([[inlines[i].label,data[inlines[i].id],inlines[i].id],[inlines[i+1].label,data[inlines[i+1].id],inlines[i+1].id]]);
-      else row(inlines[i].label,data[inlines[i].id],inlines[i].id);
+    // Process fields in original order, pairing up non-full-width fields
+    const fields = section.fields.filter(f=>f.type!=='file');
+    let i=0;
+    while(i<fields.length){
+      const f=fields[i];
+      if(f.type==='textarea'||f.full){
+        // Full width
+        row(f.label,data[f.id],f.id);
+        i++;
+      } else if(f.type==='radio'){
+        row(f.label,data[f.id],f.id);
+        i++;
+      } else {
+        // Try to pair with next non-full non-textarea non-radio field
+        const next=fields[i+1];
+        if(next&&next.type!=='textarea'&&next.type!=='radio'&&!next.full){
+          two([[f.label,data[f.id],f.id],[next.label,data[next.id],next.id]]);
+          i+=2;
+        } else {
+          row(f.label,data[f.id],f.id);
+          i++;
+        }
+      }
     }
-    radios.forEach(f=>row(f.label,data[f.id],f.id));
-    textareas.forEach(f=>row(f.label,data[f.id],f.id));
   });
 
   const totalPages=doc.internal.getNumberOfPages();
@@ -1102,6 +1143,25 @@ function renderAdminTable(){
 }
 
 function filterTable(){ renderAdminTable(); }
+
+async function testConnection(){
+  showSpinner('Testing connection to Google Sheets…');
+  try {
+    const res = await fetch(SHEET_URL, {method:'POST', headers:{'Content-Type':'text/plain'}, body:JSON.stringify({action:'getAll'})});
+    const text = await res.text();
+    hideSpinner();
+    let json;
+    try { json = JSON.parse(text); } catch(e) {
+      alert('❌ Connection failed!\n\nApps Script returned HTML instead of JSON.\n\nThis means:\n1. Your SHEET_URL is wrong, OR\n2. You need to create a NEW Deployment in Apps Script\n\nFirst 200 chars of response:\n'+text.slice(0,200));
+      return;
+    }
+    if(json.error) { alert('⚠️ Connected but got error: '+json.error); return; }
+    alert('✅ Connected successfully!\nFound '+( json.candidates?.length||0)+' candidates in Google Sheets.');
+  } catch(e) {
+    hideSpinner();
+    alert('❌ Network error: '+e.message+'\n\nCheck your SHEET_URL in index.html');
+  }
+}
 
 // ── INLINE REMARKS EDITOR ─────────────────────────────────
 function editRemarks(displayEl, candidateId){
@@ -1365,8 +1425,14 @@ function resetConfigToDefault(){ if(!confirm('Reset ALL form config to factory d
 //  API CALLS
 // ═══════════════════════════════════════════════════════
 async function apiCall(payload){
-  const res=await fetch(SHEET_URL,{method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify(payload)});
-  const json=await res.json();
+  if(!SHEET_URL || SHEET_URL.includes('YOUR_APPS_SCRIPT')){
+    throw new Error('SHEET_URL not set. Paste your Apps Script Web App URL in index.html');
+  }
+  const res = await fetch(SHEET_URL, {method:'POST', headers:{'Content-Type':'text/plain'}, body:JSON.stringify(payload)});
+  const text = await res.text();
+  let json;
+  try { json = JSON.parse(text); }
+  catch(e) { throw new Error('Apps Script returned invalid response. Check deployment. Details: '+text.slice(0,120)); }
   if(json.error) throw new Error(json.error);
   return json;
 }
