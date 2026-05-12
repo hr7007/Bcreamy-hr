@@ -241,6 +241,26 @@
     .add-field-grid input,.add-field-grid select{border:2px solid var(--border);border-radius:8px;padding:9px 12px;font-size:0.85rem;outline:none;}
     .add-field-grid input:focus,.add-field-grid select:focus{border-color:var(--red);}
 
+    /* PDF Preview Modal */
+    #pdfModal{position:fixed;inset:0;z-index:99998;background:rgba(0,0,0,0.85);display:none;align-items:center;justify-content:center;backdrop-filter:blur(4px);}
+    #pdfModal.show{display:flex;}
+    .pdf-modal-box{background:#2a2a2a;border-radius:16px;width:90vw;max-width:900px;height:90vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,0.5);}
+    .pdf-modal-header{background:var(--dark);padding:14px 20px;display:flex;align-items:center;justify-content:space-between;border-bottom:2px solid var(--red);flex-shrink:0;}
+    .pdf-modal-title{font-family:'Nunito',sans-serif;font-weight:800;color:#fff;font-size:1rem;display:flex;align-items:center;gap:8px;}
+    .pdf-modal-actions{display:flex;gap:8px;}
+    .pdf-action-btn{background:var(--red);color:#fff;border:none;border-radius:8px;padding:8px 16px;font-family:'Nunito',sans-serif;font-weight:700;font-size:0.85rem;cursor:pointer;display:flex;align-items:center;gap:6px;transition:opacity 0.2s;}
+    .pdf-action-btn:hover{opacity:0.85;}
+    .pdf-action-btn.print{background:var(--yellow);color:var(--dark);}
+    .pdf-action-btn.close-btn{background:#444;color:#fff;}
+    #pdfFrame{flex:1;border:none;background:#fff;}
+
+    /* Inline remarks editor */
+    .remarks-cell{position:relative;}
+    .remarks-text{font-size:0.82rem;color:var(--dark);max-width:160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;padding:4px 8px;border:1.5px dashed transparent;border-radius:6px;transition:border-color 0.2s;}
+    .remarks-text:hover{border-color:var(--red);background:var(--red-light);}
+    .remarks-edit{display:none;width:160px;border:2px solid var(--red);border-radius:6px;padding:4px 8px;font-size:0.82rem;resize:none;outline:none;}
+    .remarks-save{display:none;background:var(--red);color:#fff;border:none;border-radius:4px;padding:3px 8px;font-size:0.75rem;font-weight:700;cursor:pointer;margin-top:4px;}
+
     /* Spinner */
     #spinner{position:fixed;inset:0;z-index:99999;background:rgba(26,26,26,0.6);display:none;align-items:center;justify-content:center;backdrop-filter:blur(3px);}
     #spinner.show{display:flex;}
@@ -276,6 +296,21 @@
     </div>
   </div>
 </nav>
+
+<!-- ═══════════════════ PDF PREVIEW MODAL ═══════════════════ -->
+<div id="pdfModal">
+  <div class="pdf-modal-box">
+    <div class="pdf-modal-header">
+      <div class="pdf-modal-title"><i class="fa fa-file-pdf" style="color:var(--red);"></i> <span id="pdfModalTitle">Candidate PDF</span></div>
+      <div class="pdf-modal-actions">
+        <button class="pdf-action-btn print" onclick="printPDF()"><i class="fa fa-print"></i> Print</button>
+        <button class="pdf-action-btn" onclick="downloadCurrentPDF()"><i class="fa fa-download"></i> Download</button>
+        <button class="pdf-action-btn close-btn" onclick="closePDFModal()"><i class="fa fa-times"></i> Close</button>
+      </div>
+    </div>
+    <iframe id="pdfFrame" src=""></iframe>
+  </div>
+</div>
 
 <!-- ═══════════════════ SPINNER ═══════════════════ -->
 <div id="spinner">
@@ -452,7 +487,7 @@
 // ═══════════════════════════════════════════════════════
 
 // ▶▶ PASTE YOUR APPS SCRIPT WEB APP URL HERE ◀◀
-const SHEET_URL = 'https://script.google.com/macros/s/AKfycbyO02Y4Dmat6leAe7iqAN72ahjWykWP_pxRClrwvQdMO7zGNSzxk-gf_3pvPhTXBd1k/exec';
+const SHEET_URL = 'YOUR_APPS_SCRIPT_WEB_APP_URL_HERE';
 const ADMIN_PIN = 'bcreamy2024';
 const CONFIG_KEY = 'bcreamyFormConfig';
 
@@ -878,38 +913,119 @@ function readResumeBase64(){
 }
 
 // ── PDF EXPORT ────────────────────────────────────────
+// ── FORMAT HELPERS ───────────────────────────────────────
+function fmtDate(v){
+  if(!v||v==='—') return '—';
+  // date input returns YYYY-MM-DD
+  if(/^\d{4}-\d{2}-\d{2}$/.test(v)){
+    const [y,m,d]=v.split('-');
+    return d+'/'+m+'/'+y;
+  }
+  return v;
+}
+function fmtTime(v){
+  if(!v||v==='—') return '—';
+  // time input returns HH:MM — just return as-is, never parse as Date
+  if(/^\d{2}:\d{2}(:\d{2})?$/.test(v)){
+    const [h,m]=v.split(':');
+    const hh=parseInt(h); const ampm=hh>=12?'PM':'AM'; const h12=hh%12||12;
+    return h12+':'+m+' '+ampm;
+  }
+  return v;
+}
+
+// ── PDF PREVIEW STATE ─────────────────────────────────────
+let _currentPdfDoc = null;
+let _currentPdfName = 'candidate.pdf';
+
 function exportPDF(candidateData){
-  const {jsPDF}=window.jspdf; const doc=new jsPDF(); const data=candidateData||collectFormData();
+  const {jsPDF}=window.jspdf;
+  const doc=new jsPDF();
+  const data=candidateData||collectFormData();
   const pageW=doc.internal.pageSize.getWidth(); let y=0;
-  function fmt(v){ return String(v||'—').replace(/₹/g,'Rs.'); }
-  function chk(n){ if(y+(n||8)>280){doc.addPage();y=18;} }
+
+  function fmt(v,fieldId){
+    if(fieldId==='interviewDate') return fmtDate(v);
+    if(fieldId==='interviewTime') return fmtTime(v);
+    return String(v||'—').replace(/₹/g,'Rs.');
+  }
+  function chk(n){ if(y+(n||8)>276){doc.addPage();y=18;} }
   function hdr(){
     doc.setFillColor(26,26,26); doc.rect(0,0,pageW,28,'F');
-    doc.setTextColor(255,255,255); doc.setFontSize(14); doc.setFont(undefined,'bold'); doc.text("B'Creamy India Pvt Ltd",14,11);
-    doc.setFontSize(9); doc.setFont(undefined,'normal'); doc.text('Candidate Interview Form',14,19);
-    doc.text('ID: '+(data.candidateId||'—'),pageW-14,19,{align:'right'}); doc.setTextColor(0,0,0); y=36;
+    doc.setTextColor(255,255,255); doc.setFontSize(14); doc.setFont(undefined,'bold');
+    doc.text("B'Creamy India Pvt Ltd",14,11);
+    doc.setFontSize(9); doc.setFont(undefined,'normal');
+    doc.text('Candidate Interview Form',14,19);
+    doc.text('ID: '+(data.candidateId||'—'),pageW-14,19,{align:'right'});
+    doc.setTextColor(0,0,0); y=36;
   }
-  function sec(t){ chk(12); doc.setFillColor(214,43,43); doc.rect(14,y-4,pageW-28,8,'F'); doc.setTextColor(255,255,255); doc.setFontSize(9); doc.setFont(undefined,'bold'); doc.text(t,17,y+1); doc.setTextColor(0,0,0); y+=10; }
-  function row(lbl,val){ const v=fmt(val); chk(8); doc.setFontSize(9); doc.setFont(undefined,'bold'); doc.setTextColor(80,40,10); doc.text(lbl+':',16,y); doc.setFont(undefined,'normal'); doc.setTextColor(30,30,30); const lines=doc.splitTextToSize(v,pageW-78); doc.text(lines,70,y); y+=Math.max(8,lines.length*6); }
-  function two(pairs){ chk(8); doc.setFontSize(9); pairs.forEach(([lbl,val],i)=>{ const v=fmt(val); const xb=i===0?16:pageW/2+4; const xv=i===0?55:pageW/2+43; doc.setFont(undefined,'bold'); doc.setTextColor(80,40,10); doc.text(lbl+':',xb,y); doc.setFont(undefined,'normal'); doc.setTextColor(30,30,30); doc.text(doc.splitTextToSize(v,45)[0],xv,y); }); y+=8; }
+  function sec(t){
+    chk(14);
+    doc.setFillColor(214,43,43); doc.rect(14,y-5,pageW-28,9,'F');
+    doc.setTextColor(255,255,255); doc.setFontSize(9); doc.setFont(undefined,'bold');
+    doc.text(t,17,y+1); doc.setTextColor(0,0,0); y+=12;
+  }
+  function row(lbl,val,fieldId){
+    const v=fmt(val,fieldId); chk(8);
+    doc.setFontSize(9); doc.setFont(undefined,'bold'); doc.setTextColor(80,40,10);
+    doc.text(lbl+':',16,y);
+    doc.setFont(undefined,'normal'); doc.setTextColor(30,30,30);
+    const lines=doc.splitTextToSize(v,pageW-78);
+    doc.text(lines,70,y); y+=Math.max(8,lines.length*6);
+  }
+  function two(pairs){
+    chk(8); doc.setFontSize(9);
+    pairs.forEach(([lbl,val,fid],i)=>{
+      const v=fmt(val,fid);
+      const xb=i===0?16:pageW/2+4; const xv=i===0?55:pageW/2+43;
+      doc.setFont(undefined,'bold'); doc.setTextColor(80,40,10); doc.text(lbl+':',xb,y);
+      doc.setFont(undefined,'normal'); doc.setTextColor(30,30,30);
+      doc.text(doc.splitTextToSize(v,42)[0],xv,y);
+    }); y+=8;
+  }
+
   hdr();
   formConfig.forEach(section=>{
     sec(section.badge+'.  '+section.title);
-    const normalFields = section.fields.filter(f=>f.type!=='file'&&f.type!=='radio');
-    const radioFields  = section.fields.filter(f=>f.type==='radio');
-    // Pair up non-textarea fields
-    const inlines = normalFields.filter(f=>f.type!=='textarea');
-    const textareas= normalFields.filter(f=>f.type==='textarea');
+    const inlines  = section.fields.filter(f=>f.type!=='file'&&f.type!=='radio'&&f.type!=='textarea');
+    const radios   = section.fields.filter(f=>f.type==='radio');
+    const textareas= section.fields.filter(f=>f.type==='textarea');
     for(let i=0;i<inlines.length;i+=2){
-      if(inlines[i+1]) two([[inlines[i].label,data[inlines[i].id]],[inlines[i+1].label,data[inlines[i+1].id]]]);
-      else row(inlines[i].label,data[inlines[i].id]);
+      if(inlines[i+1]) two([[inlines[i].label,data[inlines[i].id],inlines[i].id],[inlines[i+1].label,data[inlines[i+1].id],inlines[i+1].id]]);
+      else row(inlines[i].label,data[inlines[i].id],inlines[i].id);
     }
-    radioFields.forEach(f=>row(f.label,data[f.id]));
-    textareas.forEach(f=>row(f.label,data[f.id]));
+    radios.forEach(f=>row(f.label,data[f.id],f.id));
+    textareas.forEach(f=>row(f.label,data[f.id],f.id));
   });
+
   const totalPages=doc.internal.getNumberOfPages();
-  for(let p=1;p<=totalPages;p++){ doc.setPage(p); doc.setFontSize(7); doc.setTextColor(150,150,150); doc.text("B'Creamy India Pvt Ltd — Confidential",14,292); doc.text('Page '+p+' of '+totalPages,pageW-14,292,{align:'right'}); }
-  doc.save((data.candidateId||'candidate')+'.pdf');
+  for(let p=1;p<=totalPages;p++){
+    doc.setPage(p); doc.setFontSize(7); doc.setTextColor(150,150,150);
+    doc.text("B'Creamy India Pvt Ltd — Confidential",14,292);
+    doc.text('Page '+p+' of '+totalPages,pageW-14,292,{align:'right'});
+  }
+
+  _currentPdfDoc  = doc;
+  _currentPdfName = (data.candidateId||'candidate')+'.pdf';
+  // Show preview instead of direct download
+  const blob = doc.output('blob');
+  const url  = URL.createObjectURL(blob);
+  document.getElementById('pdfFrame').src = url;
+  document.getElementById('pdfModalTitle').textContent = _currentPdfName;
+  document.getElementById('pdfModal').classList.add('show');
+}
+
+function closePDFModal(){
+  document.getElementById('pdfModal').classList.remove('show');
+  document.getElementById('pdfFrame').src='';
+}
+function downloadCurrentPDF(){
+  if(_currentPdfDoc) _currentPdfDoc.save(_currentPdfName);
+}
+function printPDF(){
+  const frame=document.getElementById('pdfFrame');
+  frame.contentWindow.focus();
+  frame.contentWindow.print();
 }
 
 // ═══════════════════════════════════════════════════════
@@ -933,7 +1049,7 @@ function renderAdminTable(){
   const thead=document.getElementById('tableHead');
   thead.innerHTML='<tr>'+keyCols.map(k=>{
     const f = findField(k); return '<th>'+(f?f.label:k)+'</th>';
-  }).join('')+'<th>Resume</th><th>Actions</th></tr>';
+  }).join('')+'<th>Remarks</th><th>Resume</th><th>Actions</th></tr>';
 
   const search=(document.getElementById('searchInput').value||'').toLowerCase();
   const statusF=document.getElementById('statusFilter').value;
@@ -965,9 +1081,17 @@ function renderAdminTable(){
       if(k==='status') return '<td><select class="status-pill s-'+st+'" onchange="updateStatus(\''+c.candidateId+'\',this)">'+opts+'</select></td>';
       if(k==='candidateId') return '<td><code style="font-size:0.8rem;">'+( c[k]||'—')+'</code></td>';
       if(k==='totalExp') return '<td>'+(c[k]?c[k]+' yr':'—')+'</td>';
+      if(k==='interviewDate') return '<td>'+(c[k]?fmtDate(c[k]):'—')+'</td>';
       return '<td>'+(c[k]||'—')+'</td>';
     }).join('');
+    const rv=(c.remarks||'').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+    const rd=rv||'<span style=\"color:#ccc;font-style:italic;font-size:0.78rem;\">Click to add…</span>';
     return '<tr>'+cells+
+      '<td class=\"remarks-cell\">'+
+        '<div class=\"remarks-text\" onclick=\"editRemarks(this,\'' +c.candidateId+ '\')\" title=\"Click to edit\">'+rd+'</div>'+
+        '<textarea class=\"remarks-edit\" rows=\"2\" onblur=\"saveRemarks(this,\'' +c.candidateId+ '\')\" onkeydown=\"if(event.key===\'Enter\'&&!event.shiftKey){event.preventDefault();saveRemarks(this,\'' +c.candidateId+ '\');}\">'+rv+'</textarea>'+
+        '<button class=\"remarks-save\" onclick=\"saveRemarks(this.previousElementSibling,\'' +c.candidateId+ '\')\">✓ Save</button>'+
+      '</td>'+
       '<td>'+(c.resumeLink?'<a href="'+c.resumeLink+'" target="_blank" style="color:var(--red);font-weight:600;font-size:0.82rem;text-decoration:none;"><i class="fa fa-file-alt"></i> View</a>':'<span style="color:#ccc;">—</span>')+'</td>'+
       '<td>'+
         '<button class="action-btn ab-edit" onclick="openReedit(\''+c.candidateId+'\')"><i class="fa fa-edit"></i></button>'+
@@ -978,6 +1102,38 @@ function renderAdminTable(){
 }
 
 function filterTable(){ renderAdminTable(); }
+
+// ── INLINE REMARKS EDITOR ─────────────────────────────────
+function editRemarks(displayEl, candidateId){
+  const textarea = displayEl.nextElementSibling;
+  const saveBtn  = textarea.nextElementSibling;
+  displayEl.style.display='none';
+  textarea.style.display='block';
+  saveBtn.style.display='block';
+  textarea.focus();
+  textarea.selectionStart=textarea.value.length;
+}
+
+async function saveRemarks(textarea, candidateId){
+  const newVal = textarea.value.trim();
+  const displayEl = textarea.previousElementSibling;
+  const saveBtn   = textarea.nextElementSibling;
+  // Update cache
+  const c = candidates.find(x=>x.candidateId===candidateId);
+  if(c) c.remarks = newVal;
+  // Update display
+  displayEl.innerHTML = newVal || '<span style="color:#ccc;font-style:italic;font-size:0.78rem;">Click to add…</span>';
+  displayEl.style.display='block';
+  textarea.style.display='none';
+  saveBtn.style.display='none';
+  // Save to Sheets
+  try {
+    const existing = candidates.find(x=>x.candidateId===candidateId)||{};
+    const updated  = Object.assign({}, existing, {remarks:newVal, lastEdited:new Date().toISOString()});
+    await apiCall({action:'update', candidate:updated, resume:null});
+    showToast('✅ Remarks updated');
+  } catch(e){ showToast('⚠️ Remarks saved locally only'); }
+}
 
 function findField(id){
   for(const s of formConfig) for(const f of s.fields) if(f.id===id) return f;
